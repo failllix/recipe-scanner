@@ -1,0 +1,12 @@
+{
+  "name": "recipe-scanner",
+  "version": "1.0.0",
+  "description": "Scans images from cooking books into digital recipes for easier reference.",
+  "scripts": {},
+  "author": "Felix Prünte",
+  "license": "MIT",
+  "dependencies": {
+    "aws-cdk-lib": "2.222.0",
+    "typescript": "5.9.3"
+  }
+}
