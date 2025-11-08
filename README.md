@@ -33,3 +33,4 @@ After digitizing some recipes, I imagine the following use cases that could be b
 1. Recipe browser (incl. tagging and search)
 1. Automatic meal planning (e.g. getting suggestions for a whole week and condensed shopping)
 1. Reverse search (i.e. leftover recipe matcher)
+1. Interactive cooking instructions (e.g. verbalized step-by-step instructions)
