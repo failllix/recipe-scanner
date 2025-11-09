@@ -2,15 +2,16 @@ import * as cdk from "aws-cdk-lib/core";
 import { Construct } from "constructs";
 
 import * as cognito from "aws-cdk-lib/aws-cognito";
+import { HttpApi } from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 
 export class AuthStack extends cdk.Stack {
-  userPool: cognito.UserPool;
-  userPoolClient: cognito.UserPoolClient;
+  httpApi: HttpApi;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    this.userPool = new cognito.UserPool(this, "RecipeScannerUserPool", {
+    const userPool = new cognito.UserPool(this, "RecipeScannerUserPool", {
       selfSignUpEnabled: false,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       signInAliases: {
@@ -27,16 +28,16 @@ export class AuthStack extends cdk.Stack {
     });
 
     new cognito.CfnUserPoolGroup(this, "RecipeScannerAdminPoolGroup", {
-      userPoolId: this.userPool.userPoolId,
+      userPoolId: userPool.userPoolId,
       groupName: "admin",
     });
 
     new cognito.CfnUserPoolGroup(this, "RecipeScannerUserPoolGroup", {
-      userPoolId: this.userPool.userPoolId,
+      userPoolId: userPool.userPoolId,
       groupName: "user",
     });
 
-    this.userPoolClient = this.userPool.addClient("test-client", {
+    const userPoolClient = userPool.addClient("test-client", {
       generateSecret: true,
       oAuth: {
         callbackUrls: ["http://localhost:1234/foo"],
@@ -47,16 +48,27 @@ export class AuthStack extends cdk.Stack {
       this,
       "TestClinetManagedLoginBranding",
       {
-        userPoolId: this.userPool.userPoolId,
-        clientId: this.userPoolClient.userPoolClientId,
+        userPoolId: userPool.userPoolId,
+        clientId: userPoolClient.userPoolClientId,
         returnMergedResources: true,
         useCognitoProvidedValues: true,
       }
     );
 
-    const userPoolDomain = this.userPool.addDomain("Domain", {
+    const userPoolDomain = userPool.addDomain("Domain", {
       cognitoDomain: { domainPrefix: "recipe-scanner" },
       managedLoginVersion: cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
+    });
+
+    const authorizer = new HttpUserPoolAuthorizer(
+      "RecipeScannerAuthorizer",
+      userPool,
+      { userPoolClients: [userPoolClient] }
+    );
+
+    this.httpApi = new HttpApi(this, "RecipeScannerHttpApi", {
+      defaultAuthorizer: authorizer,
+      createDefaultStage: true,
     });
 
     new cdk.CfnOutput(this, "Cognito Domain", {
@@ -65,13 +77,18 @@ export class AuthStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, "Test Client ID", {
-      value: this.userPoolClient.userPoolClientId,
+      value: userPoolClient.userPoolClientId,
       description: "Client ID of the test client.",
     });
 
     new cdk.CfnOutput(this, "Test Client Secret", {
-      value: this.userPoolClient.userPoolClientSecret.unsafeUnwrap(),
+      value: userPoolClient.userPoolClientSecret.unsafeUnwrap(),
       description: "Client Secret of the test client.",
+    });
+
+    new cdk.CfnOutput(this, "APIUrl", {
+      value: this.httpApi.url || "",
+      description: "URL of the HTTP API gateway",
     });
   }
 }

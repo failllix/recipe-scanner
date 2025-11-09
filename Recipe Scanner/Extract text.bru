@@ -5,7 +5,7 @@ meta {
 }
 
 post {
-  url: {{base_url}}/text/extract
+  url: {{base_url}}/extraction/start
   body: json
   auth: oauth2
 }
@@ -31,6 +31,7 @@ auth:oauth2 {
 
 body:json {
   {
-    "folder": "foo123"
+    "folder": "pappardelle",
+    "language": "German"
   }
 }
