@@ -66,7 +66,7 @@ export class DataStack extends cdk.Stack {
 
     new cdk.CustomResource(this, "RecipeDataSchemaSetup", {
       serviceToken: recipeDataSchemaProvider.serviceToken,
-      properties: { schemaVersion: "0.0.5" },
+      properties: { schemaVersion: "0.0.6" },
     });
   }
 }
