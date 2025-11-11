@@ -10,6 +10,7 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as bedrock from "aws-cdk-lib/aws-bedrock";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as dsql from "aws-cdk-lib/aws-dsql";
 
 export class TextExtractionStack extends cdk.Stack {
   constructor(
@@ -17,47 +18,140 @@ export class TextExtractionStack extends cdk.Stack {
     id: string,
     {
       httpApi,
+      uploadBucket,
+      recipeDataCluster,
+      nodePostgresLayer,
     }: {
       httpApi: apigatewayv2.HttpApi;
+      uploadBucket: s3.Bucket;
+      recipeDataCluster: dsql.CfnCluster;
+      nodePostgresLayer: lambda.LayerVersion;
     },
     props?: cdk.StackProps
   ) {
     super(scope, id, props);
 
-    const uploadBucket = new s3.Bucket(this, "UploadBucket", {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      versioned: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
-    const textExtractionTopic = new sns.Topic(this, "TextExtractionTopic", {
-      displayName: "Recipe Text Extraction Topic",
-    });
-
-    const fileGatheringFunction = new lambda.Function(
+    const textExtractionResultTopic = new sns.Topic(
       this,
-      "FileGatheringFunction",
+      "TextExtractionResultTopic",
+      {
+        displayName: "Recipe text extraction post processing topic",
+      }
+    );
+
+    const textExtractionResultTopicPublishRole = new iam.Role(
+      this,
+      "TextractGrantPublishResultTopicRole",
+      {
+        assumedBy: new iam.ServicePrincipal("textract.amazonaws.com"),
+      }
+    );
+
+    textExtractionResultTopic.grantPublish(
+      textExtractionResultTopicPublishRole
+    );
+
+    const textExtractionFunction = new lambda.Function(
+      this,
+      "TextExtractionFunction",
       {
         runtime: lambda.Runtime.NODEJS_22_X,
-        handler: "index.handleFileGathering",
+        handler: "index.startTextExtraction",
         code: lambda.Code.fromAsset(
-          path.join(__dirname, "lambda", "file-gathering")
+          path.join(__dirname, "lambda", "text-extraction")
         ),
         environment: {
           S3_BUCKET: uploadBucket.bucketName,
-          TEXT_EXTRACTION_TOPIC: textExtractionTopic.topicArn,
+          CLUSTER_ENDPOINT: `${recipeDataCluster.attrIdentifier}.dsql.${props?.env?.region}.on.aws`,
+          CLUSTER_REGION: props?.env?.region || "",
+          TEXT_EXTRACTION_RESULT_TOPIC_ROLE:
+            textExtractionResultTopicPublishRole.roleArn,
+          TEXT_EXTRACTION_RESULT_TOPIC: textExtractionResultTopic.topicArn,
         },
+        layers: [nodePostgresLayer],
         timeout: cdk.Duration.minutes(1),
       }
     );
 
-    uploadBucket.grantRead(fileGatheringFunction);
-    textExtractionTopic.grantPublish(fileGatheringFunction);
+    uploadBucket.grantRead(textExtractionFunction);
+    textExtractionFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["dsql:DbConnectAdmin"],
+        resources: [recipeDataCluster.attrResourceArn],
+      })
+    );
+    textExtractionFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["textract:StartDocumentAnalysis"],
+        resources: ["*"],
+      })
+    );
+
+    const textExtractionFunctionIntegration = new HttpLambdaIntegration(
+      "TextExtractionFunctionIntegration",
+      textExtractionFunction
+    );
+
+    httpApi.addRoutes({
+      path: "/extraction/start",
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: textExtractionFunctionIntegration,
+    });
+
+    const recipeSchemaGenerationTopic = new sns.Topic(
+      this,
+      "RecipeSchemaGenerationTopic",
+      {
+        displayName: "Recipe schema generation topic",
+      }
+    );
+
+    const textExtractionPostProcessingFunction = new lambda.Function(
+      this,
+      "TextExtractionPostProcessingFunction",
+      {
+        runtime: lambda.Runtime.NODEJS_22_X,
+        handler: "index.processTextExtractionResult",
+        code: lambda.Code.fromAsset(
+          path.join(__dirname, "lambda", "text-extraction-post-processing")
+        ),
+        environment: {
+          CLUSTER_ENDPOINT: `${recipeDataCluster.attrIdentifier}.dsql.${props?.env?.region}.on.aws`,
+          CLUSTER_REGION: props?.env?.region || "",
+          S3_BUCKET: uploadBucket.bucketName,
+          RECIPE_SCHEMA_GENERATION_TOPIC: recipeSchemaGenerationTopic.topicArn,
+        },
+        layers: [nodePostgresLayer],
+        timeout: cdk.Duration.minutes(1),
+      }
+    );
+
+    textExtractionResultTopic.addSubscription(
+      new subscriptions.LambdaSubscription(textExtractionPostProcessingFunction)
+    );
+    textExtractionPostProcessingFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["dsql:DbConnectAdmin"],
+        resources: [recipeDataCluster.attrResourceArn],
+      })
+    );
+    textExtractionPostProcessingFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["textract:GetDocumentAnalysis"],
+        resources: ["*"],
+      })
+    );
+    uploadBucket.grantWrite(textExtractionPostProcessingFunction);
+    recipeSchemaGenerationTopic.grantPublish(
+      textExtractionPostProcessingFunction
+    );
 
     const inferenceModelId =
-      bedrock.FoundationModelIdentifier.AMAZON_NOVA_PRO_V1_0.modelId;
+      bedrock.FoundationModelIdentifier.AMAZON_NOVA_LITE_V1_0.modelId;
 
     const inferenceProfileArn = `arn:aws:bedrock:${props?.env?.region}:${
       props?.env?.account
@@ -76,56 +170,43 @@ export class TextExtractionStack extends cdk.Stack {
       }
     );
 
-    const textExtractionFunction = new lambda.Function(
+    const recipeSchemaGenerationFunction = new lambda.Function(
       this,
-      "TextExtractionFunction",
+      "RecipeSchemaGenerationFunction",
       {
-        runtime: lambda.Runtime.PYTHON_3_13,
-        handler: "index.handle_text_extraction",
+        runtime: lambda.Runtime.NODEJS_22_X,
+        handler: "index.generateSchema",
         code: lambda.Code.fromAsset(
-          path.join(__dirname, "lambda", "text-extraction"),
-          {
-            bundling: {
-              image: lambda.Runtime.PYTHON_3_13.bundlingImage,
-              command: [
-                "bash",
-                "-c",
-                "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
-              ],
-            },
-          }
+          path.join(__dirname, "lambda", "recipe-schema-generation")
         ),
         environment: {
-          S3_BUCKET_NAME: uploadBucket.bucketName,
-          S3_BUCKET_URL: uploadBucket.s3UrlForObject(),
-          S3_BUCKET_OWNER: props?.env?.account || "",
+          S3_BUCKET: uploadBucket.bucketName,
+          CLUSTER_ENDPOINT: `${recipeDataCluster.attrIdentifier}.dsql.${props?.env?.region}.on.aws`,
+          CLUSTER_REGION: props?.env?.region || "",
           MODEL_ID: inferenceProfile.attrInferenceProfileArn,
         },
         timeout: cdk.Duration.minutes(3),
+        layers: [nodePostgresLayer],
       }
     );
-    textExtractionFunction.addToRolePolicy(
+    recipeSchemaGenerationFunction.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel"],
         resources: ["*"],
       })
     );
-    textExtractionTopic.addSubscription(
-      new subscriptions.LambdaSubscription(textExtractionFunction)
+    recipeSchemaGenerationFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["dsql:DbConnectAdmin"],
+        resources: [recipeDataCluster.attrResourceArn],
+      })
+    );
+    recipeSchemaGenerationTopic.addSubscription(
+      new subscriptions.LambdaSubscription(recipeSchemaGenerationFunction)
     );
 
-    uploadBucket.grantReadWrite(textExtractionFunction);
-
-    const textExtractionFunctionIntegration = new HttpLambdaIntegration(
-      "TextExtractionFunctionIntegration",
-      fileGatheringFunction
-    );
-
-    httpApi.addRoutes({
-      path: "/extraction/start",
-      methods: [apigatewayv2.HttpMethod.POST],
-      integration: textExtractionFunctionIntegration,
-    });
+    uploadBucket.grantReadWrite(recipeSchemaGenerationFunction);
   }
 }
