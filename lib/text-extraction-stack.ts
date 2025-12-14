@@ -151,7 +151,7 @@ export class TextExtractionStack extends cdk.Stack {
     );
 
     const inferenceModelId =
-      bedrock.FoundationModelIdentifier.AMAZON_NOVA_PRO_V1_0.modelId;
+      bedrock.FoundationModelIdentifier.AMAZON_NOVA_LITE_V1_0.modelId;
 
     const inferenceProfileArn = `arn:aws:bedrock:${props?.env?.region}:${
       props?.env?.account
