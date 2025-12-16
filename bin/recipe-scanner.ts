@@ -4,6 +4,7 @@ import { TextExtractionStack } from "../lib/text-extraction-stack";
 import { AuthStack } from "../lib/auth-stack";
 import { DataStack } from "../lib/data-stack";
 import { LambdaLayerStack } from "../lib/lambda-layer-stack";
+import { AppStack } from "../lib/app-stack";
 
 const app = new cdk.App();
 
@@ -39,3 +40,7 @@ new TextExtractionStack(
     env: { account: "354552664184", region: "eu-central-1" },
   }
 );
+
+new AppStack(app, "RecipeScannerAppStack", {
+  env: { account: "354552664184", region: "eu-central-1" },
+});
