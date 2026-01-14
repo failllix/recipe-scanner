@@ -27,6 +27,18 @@ const authStack = new AuthStack(app, "RecipeScannerAuthStack", {
   env: { account: "354552664184", region: "eu-central-1" },
 });
 
+new AppStack(
+  app,
+  "RecipeScannerAppStack",
+  {
+    userPool: authStack.userPool,
+    userPoolDomain: authStack.userPoolDomain,
+  },
+  {
+    env: { account: "354552664184", region: "eu-central-1" },
+  }
+);
+
 new TextExtractionStack(
   app,
   "RecipeScannerTextExtractionStack",
@@ -40,7 +52,3 @@ new TextExtractionStack(
     env: { account: "354552664184", region: "eu-central-1" },
   }
 );
-
-new AppStack(app, "RecipeScannerAppStack", {
-  env: { account: "354552664184", region: "eu-central-1" },
-});

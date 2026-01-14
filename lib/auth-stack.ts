@@ -7,11 +7,13 @@ import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers
 
 export class AuthStack extends cdk.Stack {
   httpApi: HttpApi;
+  userPool: cognito.UserPool;
+  userPoolDomain: cognito.UserPoolDomain;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    const userPool = new cognito.UserPool(this, "RecipeScannerUserPool", {
+    this.userPool = new cognito.UserPool(this, "RecipeScannerUserPool", {
       selfSignUpEnabled: false,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       signInAliases: {
@@ -28,16 +30,16 @@ export class AuthStack extends cdk.Stack {
     });
 
     new cognito.CfnUserPoolGroup(this, "RecipeScannerAdminPoolGroup", {
-      userPoolId: userPool.userPoolId,
+      userPoolId: this.userPool.userPoolId,
       groupName: "admin",
     });
 
     new cognito.CfnUserPoolGroup(this, "RecipeScannerUserPoolGroup", {
-      userPoolId: userPool.userPoolId,
+      userPoolId: this.userPool.userPoolId,
       groupName: "user",
     });
 
-    const userPoolClient = userPool.addClient("test-client", {
+    const userPoolClient = this.userPool.addClient("test-client", {
       generateSecret: true,
       oAuth: {
         callbackUrls: ["http://localhost:1234/foo"],
@@ -48,21 +50,21 @@ export class AuthStack extends cdk.Stack {
       this,
       "TestClinetManagedLoginBranding",
       {
-        userPoolId: userPool.userPoolId,
+        userPoolId: this.userPool.userPoolId,
         clientId: userPoolClient.userPoolClientId,
         returnMergedResources: true,
         useCognitoProvidedValues: true,
       }
     );
 
-    const userPoolDomain = userPool.addDomain("Domain", {
+    this.userPoolDomain = this.userPool.addDomain("Domain", {
       cognitoDomain: { domainPrefix: "recipe-scanner" },
       managedLoginVersion: cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
     });
 
     const authorizer = new HttpUserPoolAuthorizer(
       "RecipeScannerAuthorizer",
-      userPool,
+      this.userPool,
       { userPoolClients: [userPoolClient] }
     );
 
@@ -72,7 +74,7 @@ export class AuthStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, "Cognito Domain", {
-      value: userPoolDomain.baseUrl(),
+      value: this.userPoolDomain.baseUrl(),
       description: "Base URL of the Cognito User Pool",
     });
 
